@@ -1,0 +1,98 @@
+#!/usr/bin/python
+
+import sys
+import os
+import shutil
+import argparse
+import subprocess
+
+TMP_FILE = 'tmp.gp'
+
+parser = argparse.ArgumentParser(description="Quick, adjustable, good-default plotting directly in the terminal.")
+
+parser.add_argument('plot_type', type=str, help="Type of plot to create: [cdf | timeseries | hist]")
+
+parser.add_argument('--xrange', type=str, help="range of x values, format \"min:max\", use \"*\" for default")
+parser.add_argument('--yrange', type=str, help="range of y values, format \"min:max\", use \"*\" for default")
+parser.add_argument('--logx', action="store_true")
+parser.add_argument('--logy', action="store_true")
+parser.add_argument('--resize', type=str, help="change plot height/width by multiplicative factor, format \"width_scale,height_scale\"")
+parser.add_argument('--persist', action='store_true', help="if true, don't delete the intermediate plotting script")
+parser.add_argument('--style', type=int, help="if the plot is hard to read, try adjusting this value to get different styles, default=1")
+
+args = parser.parse_args()
+
+def get_window_size():
+    cols = int(subprocess.check_output("tput cols", shell=True))
+    rows = int(subprocess.check_output("tput lines", shell=True))
+    return rows, cols
+
+def plot_base(lines, args):
+    rows, cols = get_window_size()
+    if args.resize:
+        w_adj, h_adj = (float(x) for x in args.resize.split(","))
+        cols = int(cols * w_adj)
+        rows = int(rows * h_adj)
+    lines.append("set terminal dumb size {},{}".format(cols, rows))
+    lines.append("set autoscale")
+
+    return lines
+
+def plot_args(lines, args):
+    if args.xrange: 
+        lines.append("set xrange [{}]".format(args.xrange))
+    if args.yrange: 
+        lines.append("set yrange [{}]".format(args.yrange))
+    if args.logx:
+        lines.append("set logscale x")
+    if args.logy:
+        lines.append("set logscale y")
+
+    return lines
+
+def plot_cdf(lines, args, num_cols):
+    lines.append("plot '< sort -nk1' u 0:1 smooth cumulative notitle w lines")
+    return lines
+
+def plot_timeseries(lines, args, num_cols):
+    if num_cols == 1:
+        selector = "0:1"
+    elif num_cols == 2:
+        selector = "1:2"
+    else:
+        selector = "1:2"
+        print("warning: using first two columns, ignoring the rest")
+
+    lines.append("plot '< cat' u {} notitle w lines".format(selector))
+    return lines
+
+def plot_hist(lines, args, num_cols):
+    # TODO
+    return lines
+
+plot_types = {
+    'c' : plot_cdf,
+    't' : plot_timeseries,
+    'h' : plot_hist,
+}
+
+if args.plot_type[0] in plot_types:
+    stdin = sys.stdin.read()
+    num_cols = len(stdin.split("\n")[0].split())
+
+    lines = []
+    lines = plot_base(lines, args)
+    lines = plot_args(lines, args)
+    lines = plot_types[args.plot_type[0]](lines, args, num_cols)
+    with open(TMP_FILE, 'w') as f:
+        f.write("\n".join(lines))
+
+    p = subprocess.Popen("gnuplot {}".format(TMP_FILE), shell=True, stdin=subprocess.PIPE)
+    p.communicate(stdin)
+    p.wait()
+
+    if not args.persist:
+        os.remove(TMP_FILE)
+
+else:
+    sys.exit("uknown plot type \"{}\"".format(args['plot_type']))
